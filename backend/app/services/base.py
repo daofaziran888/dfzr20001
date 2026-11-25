@@ -66,7 +66,18 @@ class BaseModuleService:
 
         rows = store.rows(self.MODULE)
         entry = {"id": max((int(row.get("id", 0)) for row in rows), default=0) + 1}
+        # 存储 LIST_FIELDS 中的标准字段
         entry.update({field: values.get(field) for field in self.LIST_FIELDS})
+        # 也存储跨模块关联的额外字段（不在 LIST_FIELDS 中但在 values 中提供的）
+        extra_fields = ["garden_id", "garden_name", "grading_ids", "process_module",
+                        "process_entry_id", "packing_id", "packing_name", "defect_ids",
+                        "shipment_id", "shipment_no", "upstream_module", "upstream_id",
+                        "fermentation_warning", "moisture_warning", "linked_defects",
+                        "audit_ref", "上游工序", "上游记录ID", "批次号", "登记编号",
+                        "序号"]
+        for ef in extra_fields:
+            if ef in values:
+                entry[ef] = values[ef]
         entry["status"] = self.STATUS_ORDER[0]
         entry["pending"] = True
         entry["abnormal"] = False
