@@ -84,7 +84,7 @@ class Pipeline:
         if request_id:
             cached = store.check_idempotent(request_id)
             if cached:
-                return cached.get("entry"), cached.get("message", "幂等: 已执行")
+                return cached.get("entry"), f"幂等: {cached.get('message', '已执行')}"
 
         current_idx = self._order_index.get(current_module, -1)
         if current_idx < 0:

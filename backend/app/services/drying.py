@@ -1,4 +1,4 @@
-"""干燥工序领域服务：控制干燥温度曲线，监控含水率达标。"""
+"""干燥工序领域服务：控制干燥温度曲线，监控含水率达标，校验上游发酵。"""
 from __future__ import annotations
 from typing import Any
 from app.services.base import BaseModuleService
@@ -27,9 +27,36 @@ class DryingService(BaseModuleService):
             errors.append("必须记录含水率")
         elif moisture > 7:
             pass  # 记录但放行，不同茶类要求不同
+        # 上游工序校验
+        upstream_module = values.get("上游工序")
+        upstream_id = values.get("上游记录ID")
+        if upstream_module and upstream_id is not None:
+            upstream = store.find(upstream_module, int(upstream_id))
+            if upstream is None:
+                errors.append(f"上游记录 {upstream_module}/{upstream_id} 不存在")
+            elif upstream.get("status") != "已确认":
+                errors.append(f"上游记录 {upstream_module}/{upstream_id} 未确认，不能进行干燥")
         return errors
+
+    def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
+        if action == "记录干燥":
+            moisture = store.parse_weight(entry.get("含水率", "0"))
+            if not self.is_moisture_standard(moisture):
+                entry["moisture_warning"] = "含水率超标，建议复烘"
+            upstream_weight = store.parse_weight(entry.get("上游重量", "0"))
+            if upstream_weight > 0:
+                entry["产出重量"] = round(upstream_weight * (1.0 - moisture / 100.0 * 0.5), 3)
+        return True, None
 
     def is_moisture_standard(self, moisture: float, tea_type: str = "绿茶") -> bool:
         """检查含水率是否达标（绿茶标准≤7%，红茶≤6%，乌龙茶≤5%）。"""
         standards = {"绿茶": 7.0, "红茶": 6.0, "乌龙茶": 5.0}
         return moisture <= standards.get(tea_type, 7.0)
+
+    def get_drying_by_fermentation(self, ferm_entry_id: int) -> list[dict[str, Any]]:
+        """获取指定发酵记录之后的干燥记录。"""
+        rows = store.rows(self.MODULE)
+        return [r for r in rows
+                if r.get("上游记录ID") is not None
+                and int(r.get("上游记录ID", -1)) == ferm_entry_id
+                and r.get("上游工序") == "fermentation"]

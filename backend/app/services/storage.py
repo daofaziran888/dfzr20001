@@ -1,4 +1,4 @@
-"""仓储养护领域服务：监控入库环境参数，跟踪陈化周期与翻仓计划。"""
+"""仓储养护领域服务：监控入库环境参数，跟踪陈化周期与翻仓计划，关联包装批次。"""
 from __future__ import annotations
 from typing import Any
 from app.services.base import BaseModuleService
@@ -24,7 +24,26 @@ class StorageService(BaseModuleService):
         humidity = store.parse_weight(values.get("入库湿度", "0"))
         if humidity <= 0 or humidity > 100:
             errors.append("入库湿度应在1-100%之间")
+        # 校验关联的包装批次
+        packing_id = values.get("packing_id")
+        if packing_id is not None:
+            packing = store.find("packing", int(packing_id))
+            if packing is None:
+                errors.append(f"包装批 {packing_id} 不存在")
+            elif packing.get("status") != "已确认":
+                errors.append(f"包装批 {packing_id} 未确认")
         return errors
+
+    def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
+        if action == "记录养护":
+            batch_no = entry.get("批次号", "")
+            if batch_no:
+                packing_id = entry.get("packing_id")
+                if packing_id is not None:
+                    packing = store.find("packing", int(packing_id))
+                    if packing:
+                        entry["packing_name"] = packing.get("登记编号", str(packing_id))
+        return True, None
 
     def is_overdue_turning(self, entry: dict[str, Any]) -> bool:
         """判断是否超过翻仓期限。"""
@@ -43,3 +62,8 @@ class StorageService(BaseModuleService):
         rows = store.rows(self.MODULE)
         batch_rows = [r for r in rows if r.get("批次号") == batch_no]
         return batch_rows[-1] if batch_rows else None
+
+    def get_storage_by_packing(self, packing_id: int) -> list[dict[str, Any]]:
+        """获取关联到指定包装批的仓储养护记录。"""
+        rows = store.rows(self.MODULE)
+        return [r for r in rows if r.get("packing_id") == packing_id]

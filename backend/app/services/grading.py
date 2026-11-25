@@ -1,4 +1,4 @@
-"""精制分级领域服务：按筛号规格分选、碎末比例控制、等级判定。"""
+"""精制分级领域服务：按筛号规格分选、碎末比例控制、等级判定，校验上游干燥。"""
 from __future__ import annotations
 from typing import Any
 from app.services.base import BaseModuleService
@@ -24,6 +24,15 @@ class GradingService(BaseModuleService):
         debris = store.parse_weight(values.get("碎末比例", "100"))
         if debris < 0 or debris > 100:
             errors.append("碎末比例格式无效")
+        # 上游工序校验
+        upstream_module = values.get("上游工序")
+        upstream_id = values.get("上游记录ID")
+        if upstream_module and upstream_id is not None:
+            upstream = store.find(upstream_module, int(upstream_id))
+            if upstream is None:
+                errors.append(f"上游记录 {upstream_module}/{upstream_id} 不存在")
+            elif upstream.get("status") != "已确认":
+                errors.append(f"上游记录 {upstream_module}/{upstream_id} 未确认，不能进行分级")
         return errors
 
     def auto_grade(self, debris_rate: float, sieve: str) -> str:
@@ -47,3 +56,13 @@ class GradingService(BaseModuleService):
             if input_weight > 0:
                 entry["产出重量"] = round(input_weight * (1.0 - debris / 100.0), 3)
         return True, None
+
+    def get_gradings_for_blending(self, batch_no: str) -> list[dict[str, Any]]:
+        """获取指定批次可用于拼配的分级结果。"""
+        rows = store.rows(self.MODULE)
+        return [r for r in rows if r.get("批次号") == batch_no and r.get("status") == "已确认"]
+
+    def get_by_grade(self, grade: str) -> list[dict[str, Any]]:
+        """按等级获取分级结果。"""
+        rows = store.rows(self.MODULE)
+        return [r for r in rows if r.get("等级判定") == grade and r.get("status") == "已确认"]

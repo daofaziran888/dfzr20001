@@ -1,4 +1,4 @@
-"""溯源码段领域服务：激活溯源二维码码段，关联批次并校验前置门禁。"""
+"""溯源码段领域服务：激活溯源二维码码段，关联批次并校验前置门禁，关联发运单。"""
 from __future__ import annotations
 from typing import Any
 from app.services.base import BaseModuleService
@@ -82,3 +82,26 @@ class TraceCodeService(BaseModuleService):
     def get_active_codes(self) -> list[dict[str, Any]]:
         """获取已激活的溯源码段。"""
         return [r for r in store.rows(self.MODULE) if r.get("status") == "已确认"]
+
+    def assign_to_shipment(self, code_entry_id: int, shipment_entry_id: int) -> tuple[bool, str]:
+        """将溯源码段分配到发运单。"""
+        code_entry = store.find(self.MODULE, code_entry_id)
+        if code_entry is None:
+            return False, f"溯源码段 {code_entry_id} 不存在"
+        if code_entry.get("status") != "已确认":
+            return False, f"溯源码段 {code_entry_id} 未激活"
+
+        shipment_entry = store.find("shipment", shipment_entry_id)
+        if shipment_entry is None:
+            return False, f"发运单 {shipment_entry_id} 不存在"
+
+        code_entry["shipment_id"] = shipment_entry_id
+        code_entry["shipment_no"] = shipment_entry.get("登记编号", str(shipment_entry_id))
+        store.log_event(self.MODULE, code_entry_id, "assign_to_shipment",
+                        {"shipment_id": shipment_entry_id})
+        return True, f"溯源码段 {code_entry_id} 已关联到发运单 {shipment_entry_id}"
+
+    def get_codes_by_shipment(self, shipment_entry_id: int) -> list[dict[str, Any]]:
+        """获取关联到指定发运单的溯源码段。"""
+        rows = store.rows(self.MODULE)
+        return [r for r in rows if r.get("shipment_id") == shipment_entry_id]

@@ -72,3 +72,21 @@ class CertificationService(BaseModuleService):
                 except ValueError:
                     continue
         return valid
+
+    def get_certs_about_to_expire(self, days: int = 30) -> list[dict[str, Any]]:
+        """获取即将到期的资质证书。"""
+        from datetime import timedelta
+        rows = store.rows(self.MODULE)
+        today = datetime.now()
+        threshold = today + timedelta(days=days)
+        expiring = []
+        for r in rows:
+            if r.get("status") == "已确认":
+                try:
+                    expiry = str(r.get("有效期至", ""))[:10]
+                    dt = datetime.strptime(expiry, "%Y-%m-%d")
+                    if today <= dt <= threshold:
+                        expiring.append(r)
+                except ValueError:
+                    continue
+        return expiring

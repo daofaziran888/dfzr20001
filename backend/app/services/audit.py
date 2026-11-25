@@ -32,12 +32,35 @@ class AuditService(BaseModuleService):
                 errors.append("整改期限不能早于当前日期")
         except ValueError:
             errors.append("整改期限格式无效")
+
+        # 校验关联的缺陷记录
+        defect_ids = values.get("defect_ids")
+        if defect_ids:
+            try:
+                ids = [int(x.strip()) for x in str(defect_ids).split(",") if x.strip()]
+                for did in ids:
+                    d = store.find("defect", did)
+                    if d is None:
+                        errors.append(f"缺陷记录 {did} 不存在")
+            except (ValueError, TypeError):
+                errors.append("defect_ids 格式应为逗号分隔的数字列表")
         return errors
 
     def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
         """签发巡查后，关联发现的缺陷记录。"""
         if action == "签发巡查":
-            pass  # 巡查记录发布无需额外检查
+            # 记录关联的缺陷
+            defect_ids = entry.get("defect_ids")
+            if defect_ids:
+                try:
+                    ids = [int(x.strip()) for x in str(defect_ids).split(",") if x.strip()]
+                    entry["linked_defects"] = ids
+                    for did in ids:
+                        d = store.find("defect", did)
+                        if d and d.get("发现节点", ""):
+                            d["audit_ref"] = f"巡查#{entry['id']}"
+                except (ValueError, TypeError):
+                    pass
         return True, None
 
     def is_overdue(self, entry: dict[str, Any]) -> bool:
@@ -54,3 +77,28 @@ class AuditService(BaseModuleService):
         return [r for r in rows
                 if r.get("status") == "已确认"
                 and (not r.get("复查结论") or str(r.get("复查结论", "")).strip() == "")]
+
+    def get_audits_with_defects(self, entry_id: int) -> list[dict[str, Any]]:
+        """获取巡查记录关联的缺陷记录列表。"""
+        entry = store.find(self.MODULE, entry_id)
+        if entry is None:
+            return []
+        defect_ids = entry.get("linked_defects", [])
+        if not defect_ids and entry.get("defect_ids"):
+            try:
+                defect_ids = [int(x.strip()) for x in str(entry.get("defect_ids", "")).split(",")
+                              if x.strip()]
+            except (ValueError, TypeError):
+                defect_ids = []
+        result = []
+        for did in defect_ids:
+            d = store.find("defect", did)
+            if d:
+                result.append(d)
+        return result
+
+    def find_defects_by_audit(self, audit_entry_id: int) -> list[dict[str, Any]]:
+        """查找被该巡查记录引用的缺陷记录。"""
+        rows = store.rows("defect")
+        audit_ref = f"巡查#{audit_entry_id}"
+        return [r for r in rows if r.get("audit_ref") == audit_ref]

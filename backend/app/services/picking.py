@@ -25,6 +25,14 @@ class PickingService(BaseModuleService):
         valid_specs = ["单芽", "一芽一叶", "一芽二叶", "一芽三叶", "对夹叶"]
         if bud_spec and bud_spec not in valid_specs:
             pass  # 允许自定义标准
+        # 校验关联地块
+        garden_id = values.get("garden_id")
+        if garden_id is not None:
+            garden = store.find("tea_garden", int(garden_id))
+            if garden is None:
+                errors.append(f"茶园地块 {garden_id} 不存在")
+            elif garden.get("status") != "已确认":
+                errors.append(f"茶园地块 {garden_id} 未认证，请先认证地块")
         return errors
 
     def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
@@ -34,9 +42,23 @@ class PickingService(BaseModuleService):
             confirmed_gardens = [g for g in gardens if g.get("status") == "已确认"]
             if not confirmed_gardens:
                 return False, "没有已认证的茶园地块，请先认证地块后再登记采摘批次"
+            # 如果 entry 指定了 garden_id，校验地块存在且已认证
+            garden_id = entry.get("garden_id")
+            if garden_id is not None:
+                garden = store.find("tea_garden", int(garden_id))
+                if garden is None:
+                    return False, f"茶园地块 {garden_id} 不存在"
+                if garden.get("status") != "已确认":
+                    return False, f"茶园地块 {garden_id} 未认证，不能用于采摘批次"
+                entry["garden_name"] = garden.get("登记编号", str(garden_id))
         return True, None
 
     def get_picking_by_date(self, date_str: str) -> list[dict[str, Any]]:
         """按日期获取采摘批次。"""
         rows = store.rows(self.MODULE)
         return [r for r in rows if str(r.get("采摘日期", "")) == date_str and r.get("status") == "已确认"]
+
+    def get_picking_by_garden(self, garden_id: int) -> list[dict[str, Any]]:
+        """获取关联到指定地块的采摘批次。"""
+        rows = store.rows(self.MODULE)
+        return [r for r in rows if r.get("garden_id") == garden_id and r.get("status") == "已确认"]

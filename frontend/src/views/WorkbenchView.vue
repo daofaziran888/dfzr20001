@@ -28,6 +28,19 @@
       </span>
     </p>
 
+    <!-- 跨模块快捷面板 -->
+    <div v-if="isProcessModule" class="cross-module-panel">
+      <h4>跨模块关联：{{ meta.name }}</h4>
+      <div class="cross-links">
+        <button class="btn ghost" :disabled="!upstreamModule" @click="jumpToModule(upstreamModule!)" :title="`查看上游：${upstreamName}`">
+          上游工序：{{ upstreamName || '无' }}
+        </button>
+        <button class="btn ghost" :disabled="!downstreamModule" @click="jumpToModule(downstreamModule!)" :title="`查看下游：${downstreamName}`">
+          下游工序：{{ downstreamName || '无' }}
+        </button>
+      </div>
+    </div>
+
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
         <span>{{ field }}</span>
@@ -35,7 +48,35 @@
       </label>
       <button class="btn" data-testid="query" type="submit">查询</button>
       <button class="btn ghost" data-testid="reset" type="button" @click="resetFilters">重置条件</button>
+      <button v-if="isProcessModule" class="btn ghost" type="button" @click="showTrace = !showTrace" :title="'查看批次追溯链'">
+        {{ showTrace ? '隐藏追溯链' : '查看追溯链' }}
+      </button>
     </form>
+
+    <!-- 批次追溯链面板 -->
+    <div v-if="showTrace && traceBatchNo" class="trace-panel">
+      <h4>批次 {{ traceBatchNo }} 追溯链</h4>
+      <div v-if="traceLoading">加载中...</div>
+      <div v-else-if="traceError" class="error-text">{{ traceError }}</div>
+      <div v-else class="trace-chain-inline">
+        <div v-for="(node, idx) in traceChain" :key="idx" class="trace-node-inline"
+          :class="{ frozen: node.frozen }">
+          <div class="node-index">{{ idx + 1 }}</div>
+          <div class="node-info">
+            <strong>{{ getProcessName(node.module) }}</strong>
+            <span>ID:{{ node.entry_id }}</span>
+            <span class="node-status-tag" :class="node.status">{{ node.status }}</span>
+          </div>
+          <div v-if="node.data" class="node-meta">
+            <span v-if="node.data['鲜叶重量'] || node.data['投入重量']">
+              重量: {{ node.data['鲜叶重量'] || node.data['投入重量'] }}kg
+            </span>
+            <span v-if="node.data['产出重量']">→ 产出: {{ node.data['产出重量'] }}kg</span>
+          </div>
+          <div v-if="idx < traceChain.length - 1" class="trace-arrow">→</div>
+        </div>
+      </div>
+    </div>
 
     <table class="data-table">
       <thead>
@@ -59,6 +100,21 @@
               @click="runAction(action, row)"
             >
               {{ action }}
+            </button>
+            <button
+              v-if="row['批次号']"
+              class="link trace-link"
+              type="button"
+              @click="viewBatchTrace(String(row['批次号']))"
+              title="查看批次追溯">
+              批次追溯
+            </button>
+            <button
+              v-if="isProcessModule && row['上游记录ID']"
+              class="link upstream-link"
+              type="button"
+              @click="viewUpstream(row)" title="查看上游工序">
+              查看上游
             </button>
           </td>
         </tr>
@@ -94,7 +150,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, nextTick } from 'vue'
 
 import {
   createEntry,
@@ -103,6 +159,7 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/backend-service'
+import { fetchTraceChain } from '@/api/pipeline-client'
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
@@ -115,6 +172,36 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+
+// 工序模块判断
+const PROCESS_ORDER = ['picking', 'withering', 'fixing', 'rolling', 'fermentation', 'drying',
+  'grading', 'blending', 'packing', 'trace_code', 'shipment']
+const PROCESS_NAMES: Record<string, string> = {
+  picking: '鲜叶采摘', withering: '萎凋', fixing: '杀青',
+  rolling: '揉捻', fermentation: '发酵', drying: '干燥',
+  grading: '精制分级', blending: '拼配', packing: '包装',
+  trace_code: '溯源码段', shipment: '发运交接',
+}
+const isProcessModule = computed(() => PROCESS_ORDER.includes(meta.key))
+const processIdx = computed(() => PROCESS_ORDER.indexOf(meta.key))
+const upstreamModule = computed(() => {
+  const idx = processIdx.value
+  return idx > 0 ? PROCESS_ORDER[idx - 1] : null
+})
+const downstreamModule = computed(() => {
+  const idx = processIdx.value
+  return idx < PROCESS_ORDER.length - 1 ? PROCESS_ORDER[idx + 1] : null
+})
+const upstreamName = computed(() => upstreamModule.value ? PROCESS_NAMES[upstreamModule.value] || upstreamModule.value : '')
+const downstreamName = computed(() => downstreamModule.value ? PROCESS_NAMES[downstreamModule.value] || downstreamModule.value : '')
+
+// 批次追溯
+const showTrace = ref(false)
+const traceBatchNo = ref('')
+const traceChain = ref<any[]>([])
+const traceLoading = ref(false)
+const traceError = ref('')
+
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
   { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
@@ -129,6 +216,10 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function getProcessName(module: string): string {
+  return PROCESS_NAMES[module] || module
+}
 
 function resetFilters() {
   filters.value = {}
@@ -187,5 +278,157 @@ async function reload() {
   }
 }
 
+function jumpToModule(targetModule: string) {
+  const router = (window as any).__router
+  if (router) {
+    router.push({ name: 'workbench', params: { moduleKey: targetModule } })
+  }
+}
+
+async function viewBatchTrace(batchNo: string) {
+  traceBatchNo.value = batchNo
+  showTrace.value = true
+  traceLoading.value = true
+  traceError.value = ''
+  try {
+    const result = await fetchTraceChain(batchNo)
+    traceChain.value = (result.chain || []).map((node: any) => ({
+      ...node,
+      frozen: false,
+      status: node.data?.status || '',
+    }))
+  } catch (err: any) {
+    traceError.value = err.message || '追溯链查询失败'
+    traceChain.value = []
+  } finally {
+    traceLoading.value = false
+  }
+}
+
+function viewUpstream(row: EntryRow) {
+  const upstreamModule = row['上游工序']
+  const upstreamId = row['上游记录ID']
+  if (upstreamModule && upstreamId) {
+    // 跳转到上游模块并高亮对应记录
+    jumpToModule(String(upstreamModule))
+  }
+}
+
 onMounted(reload)
 </script>
+
+<style scoped>
+.cross-module-panel {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  background: #e8f5e9;
+  border-radius: 6px;
+  border-left: 3px solid #27ae60;
+}
+.cross-module-panel h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #2c3e50;
+}
+.cross-links {
+  display: flex;
+  gap: 12px;
+}
+.cross-links .btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.cross-links .btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.trace-panel {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  background: #f3f8ff;
+  border-radius: 6px;
+  border-left: 3px solid #3498db;
+}
+.trace-panel h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #2c3e50;
+}
+.trace-chain-inline {
+  display: flex;
+  align-items: flex-start;
+  overflow-x: auto;
+  gap: 4px;
+  padding: 8px 0;
+}
+.trace-node-inline {
+  flex: 0 0 auto;
+  min-width: 130px;
+  padding: 8px;
+  background: white;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  font-size: 11px;
+}
+.trace-node-inline.frozen {
+  border-color: #e74c3c;
+  background: #fce4ec;
+}
+.node-index {
+  width: 18px;
+  height: 18px;
+  background: #3498db;
+  color: white;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  margin-right: 4px;
+}
+.node-info strong {
+  display: block;
+  font-size: 11px;
+}
+.node-info span {
+  display: block;
+  color: #7f8c8d;
+  font-size: 10px;
+}
+.node-status-tag {
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 9px;
+  display: inline-block;
+}
+.node-status-tag.已确认 { background: #d4edda; color: #155724; }
+.node-status-tag.草稿 { background: #fff3cd; color: #856404; }
+.node-status-tag.待确认 { background: #cce5ff; color: #004085; }
+.node-status-tag.已撤回 { background: #f8d7da; color: #721c24; }
+.node-meta {
+  margin-top: 2px;
+  font-size: 9px;
+  color: #7f8c8d;
+}
+.trace-arrow {
+  color: #3498db;
+  font-size: 14px;
+  margin: 0 2px;
+  padding-top: 8px;
+}
+.trace-link, .upstream-link {
+  color: #27ae60 !important;
+  margin-left: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  border: 1px solid #27ae60;
+  border-radius: 3px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.trace-link:hover, .upstream-link:hover {
+  background: #27ae60;
+  color: white !important;
+}
+</style>

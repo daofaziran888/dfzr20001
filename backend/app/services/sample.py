@@ -29,7 +29,26 @@ class SampleService(BaseModuleService):
                 errors.append("保存期限不能早于当前日期")
         except ValueError:
             pass
+        # 校验关联的工序节点
+        process_module = values.get("process_module")
+        process_entry_id = values.get("process_entry_id")
+        if process_module and process_entry_id is not None:
+            process_entry = store.find(process_module, int(process_entry_id))
+            if process_entry is None:
+                errors.append(f"关联工序记录 {process_module}/{process_entry_id} 不存在")
         return errors
+
+    def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
+        if action == "登记留样":
+            process_module = entry.get("process_module")
+            process_entry_id = entry.get("process_entry_id")
+            if process_module and process_entry_id is not None:
+                from app.services.pipeline import pipeline as pl
+                samp, msg = pl.link_sample_to_node(
+                    int(entry["id"]), process_module, int(process_entry_id))
+                if samp:
+                    entry["取样节点"] = samp.get("取样节点", "")
+        return True, None
 
     def is_expired(self, entry: dict[str, Any]) -> bool:
         """判断样品是否超过保存期限。"""
@@ -44,3 +63,15 @@ class SampleService(BaseModuleService):
         rows = store.rows(self.MODULE)
         node_label = f"{process_module}#{process_entry_id}"
         return [r for r in rows if node_label in str(r.get("取样节点", ""))]
+
+    def get_samples_by_process(self, process_module: str) -> list[dict[str, Any]]:
+        """获取关联到指定工序模块的留样记录。"""
+        rows = store.rows(self.MODULE)
+        results = []
+        for r in rows:
+            node = str(r.get("取样节点", ""))
+            if node:
+                from app.services.pipeline import PROCESS_NAMES
+                if process_module in node or PROCESS_NAMES.get(process_module, "") in node:
+                    results.append(r)
+        return results

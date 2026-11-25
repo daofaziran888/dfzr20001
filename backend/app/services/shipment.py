@@ -1,4 +1,4 @@
-"""发运交接领域服务：确认发运信息，校验收货方与物流信息完整性。"""
+"""发运交接领域服务：确认发运信息，校验收货方与物流信息完整性，关联溯源码段。"""
 from __future__ import annotations
 from typing import Any
 from app.services.base import BaseModuleService
@@ -72,3 +72,28 @@ class ShipmentService(BaseModuleService):
     def get_shipped_batches(self) -> list[dict[str, Any]]:
         """获取已发运的批次清单。"""
         return [r for r in store.rows(self.MODULE) if r.get("status") == "已确认"]
+
+    def get_trace_codes_for_shipment(self, shipment_entry_id: int) -> list[dict[str, Any]]:
+        """获取关联到发运单的溯源码段。"""
+        return [r for r in store.rows("trace_code") if r.get("shipment_id") == shipment_entry_id]
+
+    def get_shipment_lineage(self, shipment_entry_id: int) -> list[dict[str, Any]]:
+        """获取发运单关联的完整批次追溯链。"""
+        entry = store.find(self.MODULE, shipment_entry_id)
+        if entry is None:
+            return []
+        batch_no = entry.get("批次号", "")
+        if not batch_no:
+            return []
+        lineage = store.get_lineage(batch_no)
+        result = []
+        for node in lineage:
+            row = store.find(node["module"], node["entry_id"])
+            if row:
+                result.append({
+                    "module": node["module"],
+                    "entry_id": node["entry_id"],
+                    "status": row.get("status", ""),
+                    "data": dict(row),
+                })
+        return result

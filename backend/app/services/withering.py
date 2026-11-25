@@ -1,4 +1,4 @@
-"""萎凋工序领域服务：记录萎凋过程，计算失水率与重量变化。"""
+"""萎凋工序领域服务：记录萎凋过程，计算失水率与重量变化，校验上游采摘。"""
 from __future__ import annotations
 from typing import Any
 from app.services.base import BaseModuleService
@@ -25,8 +25,53 @@ class WitheringService(BaseModuleService):
         duration = store.parse_weight(values.get("萎凋时长", "0"))
         if duration <= 0:
             errors.append("萎凋时长必须大于0")
+        # 上游工序校验
+        upstream_module = values.get("上游工序")
+        upstream_id = values.get("上游记录ID")
+        if upstream_module and upstream_id is not None:
+            upstream = store.find(upstream_module, int(upstream_id))
+            if upstream is None:
+                errors.append(f"上游记录 {upstream_module}/{upstream_id} 不存在")
+            elif upstream.get("status") != "已确认":
+                errors.append(f"上游记录 {upstream_module}/{upstream_id} 未确认，不能进行萎凋")
         return errors
+
+    def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
+        """萎凋确认后计算重量变化。"""
+        if action == "记录萎凋":
+            batch_no = entry.get("批次号", "")
+            if batch_no:
+                lineage = store.get_lineage(batch_no)
+                for node in lineage:
+                    if node["module"] == "picking":
+                        picking_data = node.get("data", {})
+                        raw_weight = store.parse_weight(picking_data.get("鲜叶重量", 0))
+                        loss_rate = store.parse_weight(entry.get("失水率", "0")) / 100.0
+                        entry["产出重量"] = round(raw_weight * (1.0 - loss_rate), 3)
+                        break
+        return True, None
 
     def calc_weight_after_loss(self, input_weight: float, loss_rate: float) -> float:
         """根据投入重量和失水率计算萎凋后重量。"""
         return round(input_weight * (1.0 - loss_rate / 100.0), 3)
+
+    def get_downstream_steps(self, entry_id: int) -> list[dict[str, Any]]:
+        """获取当前萎凋记录后的下游工序（杀青、揉捻、发酵、干燥等）。"""
+        batch_no = None
+        for row in store.rows(self.MODULE):
+            if row["id"] == entry_id:
+                batch_no = row.get("批次号")
+                break
+        if not batch_no:
+            return []
+        result = []
+        lineage = store.get_lineage(batch_no)
+        downstream_modules = ["fixing", "rolling", "fermentation", "drying", "grading",
+                              "blending", "packing", "trace_code", "shipment"]
+        for node in lineage:
+            if node["module"] in downstream_modules:
+                row = store.find(node["module"], node["entry_id"])
+                if row:
+                    result.append({"module": node["module"], "entry_id": node["entry_id"],
+                                   "status": row.get("status", ""), "data": dict(row)})
+        return result

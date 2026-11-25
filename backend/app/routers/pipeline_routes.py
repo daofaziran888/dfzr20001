@@ -8,10 +8,10 @@ from fastapi.responses import JSONResponse
 
 from app.services.pipeline import pipeline
 
-pipeline_router = APIRouter(prefix="/api/pipeline", tags=["批次流水线"])
+router = APIRouter(prefix="/api/pipeline", tags=["批次流水线"])
 
 
-@pipeline_router.get("/{batch_no}/trace")
+@router.get("/{batch_no}/trace")
 def get_trace(batch_no: str) -> dict[str, Any]:
     """获取批次完整追溯链，按工序顺序排列。"""
     chain = pipeline.get_trace_chain(batch_no)
@@ -20,7 +20,7 @@ def get_trace(batch_no: str) -> dict[str, Any]:
     return chain
 
 
-@pipeline_router.post("/{batch_no}/advance")
+@router.post("/{batch_no}/advance")
 def advance_batch(
     batch_no: str,
     current_module: str = Query(...),
@@ -48,21 +48,21 @@ def _advance_impl(batch_no: str, current_module: str, current_entry_id: int,
     return {"ok": True, "message": message, "entry": entry}
 
 
-@pipeline_router.get("/{batch_no}/gate")
+@router.get("/{batch_no}/gate")
 def check_gate(batch_no: str) -> dict[str, Any]:
     """获取批次门禁检查结论。"""
     detail = pipeline.get_gate_detail(batch_no)
     return {"ok": detail["passed"], "detail": detail}
 
 
-@pipeline_router.get("/{batch_no}/weight-conservation")
+@router.get("/{batch_no}/weight-conservation")
 def weight_conservation(batch_no: str) -> dict[str, Any]:
     """检查批次的重量守恒。"""
     result = pipeline.check_weight_conservation(batch_no)
     return {"ok": result["conservation_ok"], "detail": result}
 
 
-@pipeline_router.post("/{batch_no}/moisture-recalc")
+@router.post("/{batch_no}/moisture-recalc")
 def recalc_moisture(batch_no: str, process_module: str = Query(...)) -> dict[str, Any]:
     """回算指定工序节点的含水率。"""
     result = pipeline.recalc_moisture_at_node(batch_no, process_module)
@@ -71,7 +71,7 @@ def recalc_moisture(batch_no: str, process_module: str = Query(...)) -> dict[str
     return {"ok": True, "detail": result}
 
 
-@pipeline_router.post("/{batch_no}/freeze-downstream")
+@router.post("/{batch_no}/freeze-downstream")
 def freeze_downstream(
     batch_no: str,
     defect_entry_id: int = Query(...),
@@ -82,7 +82,7 @@ def freeze_downstream(
     return {"ok": True, "frozen_count": count, "frozen_keys": keys}
 
 
-@pipeline_router.post("/sample/{sample_entry_id}/link")
+@router.post("/sample/{sample_entry_id}/link")
 def link_sample(
     sample_entry_id: int,
     process_module: str = Query(...),
@@ -95,7 +95,7 @@ def link_sample(
     return {"ok": True, "message": message, "sample": sample}
 
 
-@pipeline_router.post("/audit/{audit_entry_id}/review")
+@router.post("/audit/{audit_entry_id}/review")
 def update_audit_review(
     audit_entry_id: int,
     review_conclusion: str = Query(...),
@@ -107,7 +107,7 @@ def update_audit_review(
     return {"ok": True, "message": message, "entry": entry}
 
 
-@pipeline_router.get("/events")
+@router.get("/events")
 def list_events(
     module: str | None = Query(default=None),
     entry_id: int | None = Query(default=None),

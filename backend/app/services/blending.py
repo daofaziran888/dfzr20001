@@ -1,4 +1,4 @@
-"""拼配配方领域服务：管理拼配配方，校验原料比例、记录口感评分与香气。"""
+"""拼配配方领域服务：管理拼配配方，校验原料比例、记录口感评分与香气，关联多批分级结果。"""
 from __future__ import annotations
 from typing import Any
 from app.services.base import BaseModuleService
@@ -22,6 +22,19 @@ class BlendingService(BaseModuleService):
             errors.append("口感评分应在0-100之间")
         if ratio:
             self._check_ratio_sum(ratio, errors)
+        # 校验关联的分级结果
+        grading_ids = values.get("grading_ids")
+        if grading_ids:
+            try:
+                ids = [int(x.strip()) for x in str(grading_ids).split(",") if x.strip()]
+                for gid in ids:
+                    g = store.find("grading", gid)
+                    if g is None:
+                        errors.append(f"分级结果 {gid} 不存在")
+                    elif g.get("status") != "已确认":
+                        errors.append(f"分级结果 {gid} 未确认，不能用于拼配")
+            except (ValueError, TypeError):
+                errors.append("grading_ids 格式应为逗号分隔的数字列表")
         return errors
 
     def _check_ratio_sum(self, ratio_str: str, errors: list[str]) -> None:
@@ -54,3 +67,20 @@ class BlendingService(BaseModuleService):
             if r.get("批次号") == batch_no and r.get("status") == "已确认":
                 return r
         return None
+
+    def list_grading_sources(self, entry_id: int) -> list[dict[str, Any]]:
+        """列出拼配配方引用的分级结果。"""
+        row = store.find(self.MODULE, entry_id)
+        if row is None:
+            return []
+        grading_ids = row.get("grading_ids", "")
+        result = []
+        try:
+            ids = [int(x.strip()) for x in str(grading_ids).split(",") if x.strip()]
+            for gid in ids:
+                g = store.find("grading", gid)
+                if g:
+                    result.append(g)
+        except (ValueError, TypeError):
+            pass
+        return result

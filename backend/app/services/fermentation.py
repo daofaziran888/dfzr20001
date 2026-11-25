@@ -1,4 +1,4 @@
-"""发酵工序领域服务：监控发酵环境参数，控制堆高与翻堆周期。"""
+"""发酵工序领域服务：监控发酵环境参数，控制堆高与翻堆周期，校验上游揉捻。"""
 from __future__ import annotations
 from typing import Any
 from app.services.base import BaseModuleService
@@ -29,8 +29,31 @@ class FermentationService(BaseModuleService):
         heap = store.parse_weight(values.get("堆高尺寸", "0"))
         if heap <= 0:
             errors.append("堆高尺寸必须大于0")
+        # 上游工序校验
+        upstream_module = values.get("上游工序")
+        upstream_id = values.get("上游记录ID")
+        if upstream_module and upstream_id is not None:
+            upstream = store.find(upstream_module, int(upstream_id))
+            if upstream is None:
+                errors.append(f"上游记录 {upstream_module}/{upstream_id} 不存在")
+            elif upstream.get("status") != "已确认":
+                errors.append(f"上游记录 {upstream_module}/{upstream_id} 未确认，不能进行发酵")
         return errors
+
+    def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
+        if action == "记录发酵":
+            temp = store.parse_weight(entry.get("环境温度", "0"))
+            humidity = store.parse_weight(entry.get("环境湿度", "0"))
+            if not self.is_fermentation_normal(temp, humidity):
+                entry["fermentation_warning"] = "发酵条件超出正常范围，请注意品质风险"
+        return True, None
 
     def is_fermentation_normal(self, temp: float, humidity: float) -> bool:
         """判断发酵条件是否正常。"""
         return 22 <= temp <= 35 and 75 <= humidity <= 95
+
+    def get_fermentation_by_roll(self, roll_entry_id: int) -> list[dict[str, Any]]:
+        """获取指定揉捻记录之后的发酵记录。"""
+        rows = store.rows(self.MODULE)
+        return [r for r in rows if store.parse_weight(str(r.get("上游记录ID", "-1"))) == roll_entry_id
+                and r.get("上游工序") == "rolling"]

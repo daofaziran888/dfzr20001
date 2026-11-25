@@ -22,6 +22,13 @@ class DefectService(BaseModuleService):
         dtype = values.get("缺陷类型", "")
         if dtype not in self.VALID_DEFECT_TYPES:
             pass  # 允许自定义缺陷类型
+        # 校验发现节点对应的工序记录存在
+        process_module = values.get("process_module")
+        process_entry_id = values.get("process_entry_id")
+        if process_module and process_entry_id is not None:
+            process_entry = store.find(process_module, int(process_entry_id))
+            if process_entry is None:
+                errors.append(f"发现节点工序记录 {process_module}/{process_entry_id} 不存在")
         return errors
 
     def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
@@ -44,3 +51,22 @@ class DefectService(BaseModuleService):
     def get_open_defects(self) -> list[dict[str, Any]]:
         """获取所有未关闭的缺陷记录。"""
         return [r for r in store.rows(self.MODULE) if r.get("status") != "已确认"]
+
+    def get_defects_by_node(self, process_module: str, process_entry_id: int) -> list[dict[str, Any]]:
+        """获取关联到指定工序的不合格处置记录。"""
+        rows = store.rows(self.MODULE)
+        node_str = str(process_entry_id)
+        return [r for r in rows
+                if process_module in str(r.get("发现节点", ""))
+                and node_str in str(r.get("发现节点", ""))]
+
+    def get_frozen_records(self, batch_no: str) -> list[dict[str, Any]]:
+        """获取批次中被冻结的记录。"""
+        lineage = store.get_batch_lineage_nodes(batch_no)
+        frozen = []
+        for node in lineage:
+            if store.is_frozen(node["module"], node["entry_id"]):
+                row = store.find(node["module"], node["entry_id"])
+                if row:
+                    frozen.append(row)
+        return frozen
