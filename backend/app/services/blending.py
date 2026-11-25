@@ -1,15 +1,56 @@
-"""拼配配方领域服务：字段、状态和动作来自业务配置，数据处理骨架由基类复用。"""
+"""拼配配方领域服务：管理拼配配方，校验原料比例、记录口感评分与香气。"""
 from __future__ import annotations
-
+from typing import Any
 from app.services.base import BaseModuleService
-
+from app.store import store
 
 class BlendingService(BaseModuleService):
     MODULE = "blending"
     ENTITY = "拼配批次"
     OPERATION_TERM = "确认配方"
     LIST_FIELDS = ["原料比例", "拼配日期", "口感评分", "香气描述", "登记编号", "负责人", "生效版本", "备注说明"]
-    REQUIRED_FIELDS = ["原料比例", "拼配日期", "口感评分"]
+    REQUIRED_FIELDS = ["原料比例", "拼配日期"]
     STATUS_ORDER = ["草稿", "待确认", "已确认", "已撤回"]
     ACTION_RULES = {"确认配方": "已确认", "提交确认": "待确认", "撤回记录": "已撤回"}
     NEGATIVE_ACTIONS = []
+
+    def validate_entry(self, values: dict[str, Any]) -> list[str]:
+        errors = []
+        ratio = values.get("原料比例", "")
+        score = store.parse_weight(values.get("口感评分", "0"))
+        if score < 0 or score > 100:
+            errors.append("口感评分应在0-100之间")
+        if ratio:
+            self._check_ratio_sum(ratio, errors)
+        return errors
+
+    def _check_ratio_sum(self, ratio_str: str, errors: list[str]) -> None:
+        """校验原料比例之和是否为100。"""
+        try:
+            parts = ratio_str.replace("：", ":").split(":")
+            weights = [store.parse_weight(p) for p in parts if store.parse_weight(p) > 0]
+            if weights and abs(sum(weights) - 100) > 5:
+                errors.append("原料比例之和应接近100%")
+        except Exception:
+            pass
+
+    def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
+        """确认拼配时检查上游分级是否已确认。"""
+        if action == "确认配方":
+            batch_no = entry.get("批次号", "")
+            if batch_no:
+                lineage = store.get_batch_lineage_nodes(batch_no)
+                for n in lineage:
+                    if n["module"] == "grading":
+                        grade_entry = store.find("grading", n["entry_id"])
+                        if grade_entry and grade_entry.get("status") != "已确认":
+                            return False, "该批次的精制分级尚未确认，请先确认分级后配方才能生效"
+        return True, None
+
+    def get_formula_by_batch(self, batch_no: str) -> dict[str, Any] | None:
+        """获取指定批次的拼配配方。"""
+        rows = store.rows(self.MODULE)
+        for r in rows:
+            if r.get("批次号") == batch_no and r.get("status") == "已确认":
+                return r
+        return None

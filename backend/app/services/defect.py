@@ -1,15 +1,46 @@
-"""不合格处置领域服务：字段、状态和动作来自业务配置，数据处理骨架由基类复用。"""
+"""不合格处置领域服务：记录缺陷、触发冻结、关联发现节点与处置方式。"""
 from __future__ import annotations
-
+from typing import Any
 from app.services.base import BaseModuleService
-
+from app.store import store
 
 class DefectService(BaseModuleService):
     MODULE = "defect"
     ENTITY = "缺陷记录"
     OPERATION_TERM = "关闭缺陷"
     LIST_FIELDS = ["缺陷类型", "发现节点", "处置方式", "责任人", "登记编号", "负责人", "生效版本", "备注说明"]
-    REQUIRED_FIELDS = ["缺陷类型", "发现节点", "处置方式"]
+    REQUIRED_FIELDS = ["缺陷类型", "发现节点", "处置方式", "责任人"]
     STATUS_ORDER = ["草稿", "待确认", "已确认", "已撤回"]
     ACTION_RULES = {"关闭缺陷": "已确认", "提交确认": "待确认", "撤回记录": "已撤回"}
     NEGATIVE_ACTIONS = []
+
+    VALID_DEFECT_TYPES = ["农残超标", "含水率不合格", "外形缺陷", "异味污染", "包装破损",
+                          "标签错误", "重量不足", "霉菌污染", "异物混入", "仓储条件不达标"]
+
+    def validate_entry(self, values: dict[str, Any]) -> list[str]:
+        errors = []
+        dtype = values.get("缺陷类型", "")
+        if dtype not in self.VALID_DEFECT_TYPES:
+            pass  # 允许自定义缺陷类型
+        return errors
+
+    def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
+        """不合格处置确认时，自动冻结同批次发现节点之后的下游记录。"""
+        if action == "关闭缺陷":
+            batch_no = entry.get("批次号", "")
+            reason = entry.get("缺陷类型", "不合格")
+            discovered = entry.get("发现节点", "")
+            if batch_no and discovered:
+                from app.services.pipeline import pipeline as pl
+                count, keys = pl.freeze_batch_downstream(batch_no, int(entry["id"]), reason)
+                entry["冻结记录数"] = count
+        return True, None
+
+    def get_defects_by_batch(self, batch_no: str) -> list[dict[str, Any]]:
+        """获取指定批次的不合格处置记录。"""
+        rows = store.rows(self.MODULE)
+        return [r for r in rows if r.get("批次号") == batch_no]
+
+    def get_open_defects(self) -> list[dict[str, Any]]:
+        """获取所有未关闭的缺陷记录。"""
+        return [r for r in store.rows(self.MODULE) if r.get("status") != "已确认"]
