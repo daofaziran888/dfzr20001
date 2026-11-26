@@ -28,9 +28,6 @@
       </span>
     </p>
 
-    <!-- 跨模块快捷面板 -->
-    </div>
-
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
         <span>{{ field }}</span>
@@ -41,6 +38,9 @@
     </form>
 
     <!-- 批次追溯链面板 -->
+    <div v-if="showTrace && traceBatchNo" class="trace-panel">
+      <h4>批次 {{ traceBatchNo }} 追溯链</h4>
+      <div v-if="traceLoading">加载中...</div>
       <div v-else-if="traceError" class="error-text">{{ traceError }}</div>
       <div v-else class="trace-chain-inline">
         <div v-for="(node, idx) in traceChain" :key="idx" class="trace-node-inline"
@@ -134,7 +134,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, nextTick } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import {
   createEntry,
@@ -143,9 +144,11 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/backend-service'
+import { fetchTraceChain } from '@/api/pipeline-client'
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
+const router = useRouter()
 const meta = moduleMeta(props.moduleKey)
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
@@ -166,36 +169,121 @@ const PROCESS_NAMES: Record<string, string> = {
   trace_code: '溯源码段', shipment: '发运交接',
 }
 const isProcessModule = computed(() => PROCESS_ORDER.includes(meta.key))
-const processIdx = computed(() => PROCESS_ORDER.indexOf(meta.key))
-const upstreamModule = computed(() => {
-  const idx = processIdx.value
-  return idx > 0 ? PROCESS_ORDER[idx - 1] : null
-})
-const downstreamModule = computed(() => {
-  const idx = processIdx.value
-  return idx < PROCESS_ORDER.length - 1 ? PROCESS_ORDER[idx + 1] : null
-})
-const upstreamName = computed(() => upstreamModule.value ? PROCESS_NAMES[upstreamModule.value] || upstreamModule.value : '')
-const downstreamName = computed(() => downstreamModule.value ? PROCESS_NAMES[downstreamModule.value] || downstreamModule.value : '')
+// 批次追溯
+const showTrace = ref(false)
+const traceBatchNo = ref('')
+const traceChain = ref<any[]>([])
+const traceLoading = ref(false)
+const traceError = ref('')
 
-.cross-module-panel h4 {
-  margin: 0 0 8px;
-  font-size: 14px;
-  color: #2c3e50;
+const stats = computed(() => [
+  { label: meta.metrics[0], value: total.value },
+  { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
+  {
+    label: meta.metrics[2],
+    value: rows.value.filter((row) => row.status === meta.statuses[meta.statuses.length - 1]).length,
+  },
+])
+const statusSummary = computed(() =>
+  meta.statuses.map((status) => ({
+    status,
+    count: rows.value.filter((row) => String(row.status) === status).length,
+  })),
+)
+
+function getProcessName(module: string): string {
+  return PROCESS_NAMES[module] || module
 }
-.cross-links {
-  display: flex;
-  gap: 12px;
+
+function resetFilters() {
+  filters.value = {}
+  void reload()
 }
-.cross-links .btn {
-  padding: 4px 12px;
-  font-size: 12px;
-  cursor: pointer;
+
+async function exportRows() {
+  errorMessage.value = ''
+  try {
+    await downloadEntries(meta.key, filters.value)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '导出失败'
+  }
 }
-.cross-links .btn:disabled {
-  opacity: 0.5;
-  cursor: default;
+
+function openCreate() {
+  createValues.value = Object.fromEntries(meta.fields.map((field) => [field, '']))
+  errorMessage.value = ''
+  showCreate.value = true
 }
+
+async function submitCreate() {
+  creating.value = true
+  errorMessage.value = ''
+  try {
+    const result = await createEntry(meta.key, createValues.value)
+    if (!result.ok) throw new Error(result.message)
+    showCreate.value = false
+    await reload()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '登记失败'
+  } finally {
+    creating.value = false
+  }
+}
+
+async function runAction(action: string, row: EntryRow) {
+  errorMessage.value = ''
+  try {
+    const result = await applyAction(meta.key, Number(row.id), action)
+    if (!result.ok) throw new Error(result.message)
+    await reload()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '操作失败'
+  }
+}
+
+async function reload() {
+  errorMessage.value = ''
+  try {
+    const payload = await listEntries(meta.key, filters.value)
+    rows.value = payload.items
+    total.value = payload.total
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '业务列表读取失败'
+  }
+}
+
+async function viewBatchTrace(batchNo: string) {
+  traceBatchNo.value = batchNo
+  showTrace.value = true
+  traceLoading.value = true
+  traceError.value = ''
+  try {
+    const result = await fetchTraceChain(batchNo)
+    traceChain.value = (result.chain || []).map((node: any) => ({
+      ...node,
+      frozen: false,
+      status: node.data?.status || '',
+    }))
+  } catch (err: any) {
+    traceError.value = err.message || '追溯链查询失败'
+    traceChain.value = []
+  } finally {
+    traceLoading.value = false
+  }
+}
+
+function viewUpstream(row: EntryRow) {
+  const upstreamModule = row['上游工序']
+  const upstreamId = row['上游记录ID']
+  if (upstreamModule && upstreamId) {
+    void router.push({ name: 'module', params: { moduleKey: String(upstreamModule) } })
+  }
+}
+
+onMounted(reload)
+</script>
+
+<style scoped>
 .trace-panel {
   margin-bottom: 12px;
   padding: 12px 16px;
